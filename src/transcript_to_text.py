@@ -4,7 +4,7 @@ import os
 
 from deepmultilingualpunctuation import PunctuationModel
 from dotenv import load_dotenv
-from tqdm import tqdm  # 用於進度條顯示
+from tqdm import tqdm
 
 try:
     from utils import PathHelper, get_logger
@@ -45,44 +45,59 @@ def preprocess_transcript(transcript):
 def main(args):
     # List all JSON files in entities directory
     entities = [i for i in os.listdir(PathHelper.entities_dir) if i.endswith(".json")]
-    logger.info(f"Total JSON files: {len(entities)}")
+    logger.info(f"Total JSON files found: {len(entities)}")
+
+    # Get already processed files
+    processed_files = {
+        os.path.splitext(f)[0]
+        for f in os.listdir(PathHelper.text_dir)
+        if f.endswith(".txt")
+    }
 
     # Track processed transcripts
     transcripts_processed = 0
 
-    # Process each file with a progress bar
-    for jf in tqdm(entities, desc="Processing transcripts"):
-        fname = jf.split(".")[0]
-        try:
-            # Skip if output file already exists
-            output_path = PathHelper.text_dir / f"{fname}.txt"
-            if output_path.exists():
-                logger.info(f"File already exists, skipping: {fname}")
-                continue
+    # Limit the number of files to process if specified
+    files_to_process = [
+        jf for jf in entities if os.path.splitext(jf)[0] not in processed_files
+    ]
+    if args.limit > 0:
+        files_to_process = files_to_process[: args.limit]
 
+    logger.info(f"Files to be processed: {len(files_to_process)}")
+
+    # Process each file with a progress bar
+    for jf in tqdm(files_to_process, desc="Processing transcripts"):
+        fname = os.path.splitext(jf)[0]
+        try:
             # Load JSON content
             with open(PathHelper.entities_dir / jf, "r", encoding="utf8") as f:
                 ent_i = json.load(f)
 
             # Check for transcript in JSON
-            if ent_i.get("transcript"):
-                transcript_text = [t["text"] for t in ent_i["transcript"]]
+            if "transcript" not in ent_i or not ent_i["transcript"]:
+                logger.warning(f"No transcript found in file: {jf}")
+                continue
 
-                # Preprocess the transcript
-                transcript = preprocess_transcript(transcript_text)
+            transcript_text = [t["text"] for t in ent_i["transcript"]]
 
-                # Save the processed transcript
-                with open(output_path, "w", encoding="utf8") as f:
-                    json.dump(transcript, f)
+            # Preprocess the transcript
+            transcript = preprocess_transcript(transcript_text)
 
-                transcripts_processed += 1
+            # Save the processed transcript
+            output_path = PathHelper.text_dir / f"{fname}.txt"
+            with open(output_path, "w", encoding="utf8") as f:
+                json.dump(transcript, f)
 
+            transcripts_processed += 1
+
+        except json.JSONDecodeError:
+            logger.error(f"Invalid JSON format in file: {jf}")
         except Exception as e:
             logger.error(f"Error processing file {jf}: {e}")
-            continue
 
     # Log summary
-    logger.info(f"Extracted and processed transcripts from {transcripts_processed} files.")
+    logger.info(f"Successfully processed {transcripts_processed} transcripts.")
 
 
 if __name__ == "__main__":
