@@ -1,5 +1,5 @@
 import os
-
+import json
 from dotenv import load_dotenv
 from langchain.embeddings import HuggingFaceEmbeddings
 from langchain.text_splitter import RecursiveCharacterTextSplitter
@@ -10,38 +10,41 @@ try:
     from utils import PathHelper, get_logger, timeit
 except Exception as e:
     print(e)
-    raise ("Please run this script from the root directory of the project")
+    raise RuntimeError("Please run this script from the root directory of the project")
 
 # logger
 logger = get_logger(__name__)
 
-# load env variables
+# load environment variables
 dotenv_path = PathHelper.root_dir / ".env"
 load_dotenv(dotenv_path=dotenv_path)
 
 # model name for creating embeddings
 model_name = const.ENCODING_MODEL_NAME
 
-
-# get text chunks
+# function to get text chunks
 def get_text_chunks(text):
+    """
+    Splits text into chunks with specified chunk size and overlap.
+    """
     text_splitter = RecursiveCharacterTextSplitter(
         chunk_size=500, chunk_overlap=100, length_function=len
     )
     chunks = text_splitter.split_text(text)
     return chunks
 
-
-# creating embeddings for chunks of text
+# creating embeddings and vectorstore
 def get_vectorstore(text_chunks, model_name):
-    logger.info("creating vectorstore")
-    logger.info(f"model_name: {model_name}")
+    """
+    Creates a vectorstore using the specified embedding model and text chunks.
+    """
+    logger.info("Creating vectorstore...")
+    logger.info(f"Model name: {model_name}")
 
-    # get embeddings
+    # create embeddings
     embeddings = HuggingFaceEmbeddings(model_name=model_name)
 
-    # create vectorstore
-    # vectorstore = FAISS.from_texts(texts=text_chunks, embedding=embeddings)
+    # create vectorstore using Chroma
     vectorstore = Chroma.from_texts(
         text_chunks,
         embeddings,
@@ -49,48 +52,51 @@ def get_vectorstore(text_chunks, model_name):
     )
     return vectorstore
 
-
 @timeit
 def main():
-    # load data
-    videos = os.listdir(PathHelper.text_dir)
+    """
+    Main function to process text files, generate embeddings, and create vectorstore.
+    """
+    # Load text files
+    text_dir = PathHelper.text_dir
+    videos = os.listdir(text_dir)
     m_total_docs = len(videos)
 
     text_chunks = []
     m_success_transcript = 0
     m_failed_docs = 0
+
+    # Process each file
     for v in videos:
         try:
-            with open(PathHelper.text_dir / v, encoding="utf8") as f:
+            with open(text_dir / v, encoding="utf8") as f:
+                # Load JSON content
                 transcript = f.readlines()
-                transcript = eval(transcript[0])
+                transcript = json.loads(transcript[0])
 
-            # remove non-utf8 characters
-            transcript = transcript.encode("utf-8", "ignore").decode("utf-8")
+            # Ensure the transcript is cleaned
+            transcript = ''.join(char for char in transcript if char.isprintable())
 
             if transcript:
                 text_chunks_i = get_text_chunks(transcript)
                 text_chunks.extend(text_chunks_i)
                 m_success_transcript += 1
         except Exception as e:
-            logger.error(e)
+            logger.error(f"Error processing {v}: {e}")
             m_failed_docs += 1
 
-    logger.info(f"total docs: {m_total_docs}")
-    logger.info(f"success transcript: {m_success_transcript}")
-    logger.info(f"failed docs: {m_failed_docs}")
+    logger.info(f"Total docs: {m_total_docs}")
+    logger.info(f"Successfully processed transcripts: {m_success_transcript}")
+    logger.info(f"Failed docs: {m_failed_docs}")
 
-    # create vector store
+    # Create vectorstore
     vectorstore = get_vectorstore(text_chunks, model_name=model_name)
 
-    # Creating a database for similarity search and
-    # retrieving the top 5 most similar vectors from the vector index.
+    # Create retriever for similarity search
     retriever = vectorstore.as_retriever(
         search_type="mmr", search_kwargs={"k": const.N_DOCS}
     )
-    logger.info(f"retriever created: {retriever}")
-
+    logger.info(f"Retriever created successfully: {retriever}")
 
 if __name__ == "__main__":
-    # calculate how many seconds to run
     main()
