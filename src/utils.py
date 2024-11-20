@@ -11,11 +11,13 @@ from dotenv import load_dotenv
 from langchain.embeddings import HuggingFaceInferenceAPIEmbeddings
 from langchain_community.vectorstores.pgvector import PGVector
 
+# Load environment variables
 load_dotenv()
 
-LOG_LEVEL = "info"
+# Dynamically set log level
+LOG_LEVEL = os.getenv("LOG_LEVEL", "info").lower()
 
-# formatter and level options
+# Formatter and level options
 FORMATTER = logging.Formatter("%(asctime)s [%(levelname)s] %(message)s")
 LOG_LEVELS = {
     "debug": logging.DEBUG,
@@ -27,20 +29,42 @@ LOG_LEVELS = {
 
 
 def get_console_handler():
+    """
+    Configure console handler for logging.
+    """
     console_handler = logging.StreamHandler(sys.stdout)
     console_handler.setFormatter(FORMATTER)
     return console_handler
 
 
-def get_logger(logger_name):
+def get_file_handler(log_file: str):
+    """
+    Configure file handler for logging.
+    """
+    file_handler = logging.FileHandler(log_file)
+    file_handler.setFormatter(FORMATTER)
+    return file_handler
+
+
+def get_logger(logger_name, log_file="app.log"):
+    """
+    Get a configured logger with console and file handlers.
+    """
     logger = logging.getLogger(logger_name)
-    logger.setLevel(LOG_LEVELS[LOG_LEVEL])
-    logger.addHandler(get_console_handler())
+    logger.setLevel(LOG_LEVELS.get(LOG_LEVEL, logging.INFO))
+
+    # Avoid adding multiple handlers
+    if not logger.handlers:
+        logger.addHandler(get_console_handler())
+        logger.addHandler(get_file_handler(log_file))
     logger.propagate = False
     return logger
 
 
 class PathHelper:
+    """
+    Helper class for handling project paths.
+    """
     def __init__(self) -> None:
         pass
 
@@ -52,43 +76,76 @@ class PathHelper:
     text_dir = data_dir / "text"
     db_dir = root_dir / "db"
 
-    # create
-    data_dir.mkdir(exist_ok=True, parents=True)
-    entities_dir.mkdir(exist_ok=True, parents=True)
-    audio_dir.mkdir(exist_ok=True, parents=True)
-    text_dir.mkdir(exist_ok=True, parents=True)
-    db_dir.mkdir(exist_ok=True, parents=True)
+    @staticmethod
+    def create_directories():
+        """
+        Create necessary directories, with exception handling.
+        """
+        try:
+            PathHelper.data_dir.mkdir(exist_ok=True, parents=True)
+            PathHelper.entities_dir.mkdir(exist_ok=True, parents=True)
+            PathHelper.audio_dir.mkdir(exist_ok=True, parents=True)
+            PathHelper.text_dir.mkdir(exist_ok=True, parents=True)
+            PathHelper.db_dir.mkdir(exist_ok=True, parents=True)
+        except Exception as e:
+            logger.error(f"Error creating directories: {e}")
+            raise
+
+
+# Initialize logger
+logger = get_logger(__name__)
 
 
 def timeit(func):
+    """
+    Decorator for measuring function execution time.
+    """
     @wraps(func)
     def timeit_wrapper(*args, **kwargs):
         start_time = time.perf_counter()
         result = func(*args, **kwargs)
         end_time = time.perf_counter()
         total_time = end_time - start_time
-        print(f"Function {func.__name__}{args} {kwargs} Took {total_time:.4f} seconds")
+        logger.info(f"Function '{func.__name__}' executed in {total_time:.4f} seconds.")
         return result
 
     return timeit_wrapper
 
 
 class MaxPoolingEmbeddings(HuggingFaceInferenceAPIEmbeddings):
+    """
+    Custom embedding class with average pooling.
+    """
     def embed_query(self, text: str) -> List[float]:
-        embeddings = self.embed_documents([text])[0]
-        average_pooling = np.mean(embeddings[0], axis=0)
-
-        return average_pooling.tolist()
+        """
+        Embed a single query text with average pooling.
+        """
+        embeddings = self.embed_documents([text])
+        return np.mean(embeddings, axis=0).tolist()
 
 
 def get_connection_string():
-    conn_str = PGVector.connection_string_from_db_params(
-        driver=os.environ.get("PGVECTOR_DRIVER", "psycopg2"),
-        host=os.environ.get("PGVECTOR_HOST", "localhost"),
-        port=int(os.environ.get("PGVECTOR_PORT", "5432")),
-        database=os.environ.get("PGVECTOR_DATABASE", "postgres"),
-        user=os.environ.get("PGVECTOR_USER", "user"),
-        password=os.environ.get("PGVECTOR_PASSWORD", "pwd"),
-    )
+    """
+    Generate database connection string from environment variables.
+    """
+    try:
+        conn_str = PGVector.connection_string_from_db_params(
+            driver=os.getenv("PGVECTOR_DRIVER", "psycopg2"),
+            host=os.getenv("PGVECTOR_HOST", "localhost"),
+            port=int(os.getenv("PGVECTOR_PORT", "5432")),
+            database=os.getenv("PGVECTOR_DATABASE", "postgres"),
+            user=os.getenv("PGVECTOR_USER", ""),
+            password=os.getenv("PGVECTOR_PASSWORD", ""),
+        )
+        return conn_str
+    except KeyError as e:
+        logger.error(f"Missing required environment variable: {e}")
+        raise ValueError("Missing required environment variables for database connection.")
 
-    return conn_str
+
+if __name__ == "__main__":
+    # Ensure directories exist
+    PathHelper.create_directories()
+
+    # Example usage of logger
+    logger.info("Application initialized.")
