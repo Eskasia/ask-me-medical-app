@@ -15,3 +15,4 @@ opentelemetry-sdk==1.28.2
 requests-oauthlib==2.0.0
 langchain==0.3.7
 langchain_community==0.3.7
+opencc-python-reimplemented==0.1.7
