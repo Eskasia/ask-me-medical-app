@@ -1,11 +1,9 @@
-# ask-me-parenting-line-bot
+# ask-me-medcial-line-bot
 
 
 1. get video entites
 ```
-channe_name=SunnyHuangIBCLC
-channe_name=DrTNHuang
-channe_name=imleaderkid
+channel_name=柏格醫生中文 健康知識
 python3 video_crawler.py --channel-name=$channe_name
 ```
 
