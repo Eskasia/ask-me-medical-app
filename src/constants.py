@@ -2,13 +2,13 @@
 VIDEO_ID = "video_id"
 VIDEO_URL = "video_url"
 TITLE = "title"
-TRNASCRIPT = "transcript"
+TRANSCRIPT = "transcript"  # 修正拼字
 CHANNEL_NAME = "channel_name"
 
 # model name
-# MODEL_NAME = "shibing624/text2vec-base-chinese"
-ENCODING_MODEL_NAME = "GanymedeNil/text2vec-large-chinese"
-CHAT_GPT_MODEL_NAME = "gpt-3.5-turbo"
+# 由於需要切換到 GPT-4，更新模型名稱
+ENCODING_MODEL_NAME = "GanymedeNil/text2vec-large-chinese"  # 編碼模型保持不變
+CHAT_GPT_MODEL_NAME = "gpt-4"  # 修改為 GPT-4
 
 # db
 DB = "db"
@@ -24,8 +24,8 @@ TEST_RESPONSES = ["測試一", "測試二", "測試三", "測試四", "測試五
 
 # condense_question_prompt
 PROMPT = (
-    "Given the following conversation and a follow up question, "
-    + "rephrase the follow up question to be a standalone question,"
+    "Given the following conversation and a follow-up question, "
+    + "rephrase the follow-up question to be a standalone question, "
     + "in Traditional Chinese and DO NOT in Simplified Chinese."
 )
 
