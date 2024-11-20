@@ -2,103 +2,119 @@ import argparse
 import json
 import time
 
-# import mysql.connector
 from selenium import webdriver
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.support.wait import WebDriverWait
 from youtube_transcript_api import YouTubeTranscriptApi
+from tqdm import tqdm  # 用於進度條顯示
 
 try:
     import constants as const
     from utils import PathHelper, get_logger
 except Exception as e:
     print(e)
-    raise ("Please run this script from the root directory of the project")
+    raise RuntimeError("Please run this script from the root directory of the project")
 
-# logger
+# Logger
 logger = get_logger(__name__)
 
 
-def main(args):
-    channel_name = args.channel_name
-    logger.info(f"channel_name: {channel_name}")
-
-    # init driver
-    driver = webdriver.Chrome()
-
-    url = f"https://www.youtube.com/@{channel_name}"
-    driver.get(url + "/videos")
-
-    # scroll
-    ht = driver.execute_script("return document.documentElement.scrollHeight;")
+def scroll_to_bottom(driver, timeout=2):
+    """
+    Scroll to the bottom of the page until no more content loads.
+    """
     while True:
         prev_ht = driver.execute_script("return document.documentElement.scrollHeight;")
         driver.execute_script(
             "window.scrollTo(0, document.documentElement.scrollHeight);"
         )
-        time.sleep(2)
-        ht = driver.execute_script("return document.documentElement.scrollHeight;")
-        if prev_ht == ht:
+        time.sleep(timeout)
+        new_ht = driver.execute_script("return document.documentElement.scrollHeight;")
+        if prev_ht == new_ht:
             break
 
-    # save
-    # https://stackoverflow.com/questions/74578175/getting-video-links-from-youtube-channel-in-python-selenium
+
+def fetch_video_details(driver, channel_name):
+    """
+    Fetch video details (URL and title) from a YouTube channel's videos page.
+    """
+    url = f"https://www.youtube.com/@{channel_name}/videos"
+    driver.get(url)
+
+    # Scroll to load all videos
+    logger.info(f"Loading videos for channel: {channel_name}")
+    scroll_to_bottom(driver)
+
     videos = []
     try:
-        for e in WebDriverWait(driver, 20).until(
+        elements = WebDriverWait(driver, 20).until(
             EC.presence_of_all_elements_located((By.CSS_SELECTOR, "div#details"))
-        ):
-            # attr
+        )
+        for e in elements:
             title = e.find_element(By.CSS_SELECTOR, "a#video-title-link").get_attribute(
                 "title"
             )
             vurl = e.find_element(By.CSS_SELECTOR, "a#video-title-link").get_attribute(
                 "href"
             )
-
-            # append
-            videos.append(
-                {
-                    const.VIDEO_URL: vurl,
-                    const.TITLE: title,
-                }
-            )
+            videos.append({const.VIDEO_URL: vurl, const.TITLE: title})
     except Exception as e:
-        e
-        pass
+        logger.error(f"Error fetching video details: {e}")
 
-    logger.info(f"# videos from {channel_name}: {len(videos)}")
+    logger.info(f"Found {len(videos)} videos for channel: {channel_name}")
+    return videos
 
-    # get transcripts
-    for video_i in videos:
-        video_id = video_i[const.VIDEO_URL].split("=")[-1]
-        video_i[const.VIDEO_ID] = video_id
-        video_i[const.CHANNEL_NAME] = channel_name
-        logger.info(f"video id: {video_id}")
 
-        entity_fname = PathHelper.entities_dir / f"{video_i[const.VIDEO_ID]}.json"
+def fetch_transcripts(videos, channel_name):
+    """
+    Fetch transcripts for videos and save them as JSON files.
+    """
+    for video in tqdm(videos, desc="Fetching transcripts"):
+        video_id = video[const.VIDEO_URL].split("v=")[-1]
+        video[const.VIDEO_ID] = video_id
+        video[const.CHANNEL_NAME] = channel_name
 
-        # check if file exist
+        entity_fname = PathHelper.entities_dir / f"{video[const.VIDEO_ID]}.json"
+
+        # Check if the transcript file already exists
         if entity_fname.exists():
-            logger.info(f"file exist: {entity_fname}")
-            # jump to next video
+            logger.info(f"Transcript file already exists: {entity_fname}")
             continue
 
         try:
-            transcript_i = YouTubeTranscriptApi.get_transcript(
+            # Fetch transcript using YouTubeTranscriptApi
+            transcript = YouTubeTranscriptApi.get_transcript(
                 video_id, languages=["zh-TW"]
             )
-            video_i[const.TRNASCRIPT] = transcript_i
+            video[const.TRANSCRIPT] = transcript
         except Exception as e:
-            e
-            video_i[const.TRNASCRIPT] = []
-        finally:
-            # save obj as json to local
-            with open(
-                PathHelper.entities_dir / f"{video_i[const.VIDEO_ID]}.json", "w"
-            ) as f:
-                json.dump(video_i, f)
+            logger.error(f"Error fetching transcript for video {video_id}: {e}")
+            video[const.TRANSCRIPT] = []
+
+        # Save video details and transcript
+        try:
+            with open(entity_fname, "w", encoding="utf8") as f:
+                json.dump(video, f, ensure_ascii=False, indent=4)
+        except Exception as e:
+            logger.error(f"Error saving transcript file for video {video_id}: {e}")
+
+
+def main(args):
+    channel_name = args.channel_name
+    logger.info(f"Processing channel: {channel_name}")
+
+    # Initialize Selenium WebDriver
+    driver = webdriver.Chrome()
+
+    try:
+        # Fetch video details
+        videos = fetch_video_details(driver, channel_name)
+
+        # Fetch transcripts for videos
+        fetch_transcripts(videos, channel_name)
+    finally:
+        driver.quit()
 
 
 if __name__ == "__main__":
@@ -106,6 +122,5 @@ if __name__ == "__main__":
     parser.add_argument(
         "--channel-name", type=str, help="Channel Name without @", default="DrTNHuang"
     )
-
     args = parser.parse_args()
     main(args)
