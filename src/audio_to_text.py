@@ -12,131 +12,30 @@ try:
     from utils import PathHelper, get_logger
 except Exception as e:
     print(e)
-    raise ("Please run this script from the root directory of the project")
+    raise RuntimeError("Please run this script from the root directory of the project")
 
-# load env variables
+# Load environment variables
 dotenv_path = PathHelper.root_dir / ".env"
 load_dotenv(dotenv_path=dotenv_path)
 
-# logger
+# Logger
 logger = get_logger(__name__)
 
 
-def main(args):
-    channel_name = args.channel_name
-    logger.info(f"channel_name: {channel_name}")
+def process_audio_to_text(fname_ext, model, punct_model):
+    """
+    Process a single audio file to text using WhisperModel and restore punctuation.
+    """
+    fname = fname_ext.split(".")[0]
+    audio_path = PathHelper.audio_dir / fname_ext
+    try:
+        # Load audio
+        audio_file = AudioSegment.from_mp3(audio_path)
+        logger.info(f"Processing file: {fname_ext}")
 
-    # init model
-    punct_model = PunctuationModel()
-
-    # select files
-    fnames = [i for i in os.listdir(PathHelper.audio_dir) if i.endswith(".mp3")]
-    fnames_has_text = [i for i in os.listdir(PathHelper.text_dir) if i.endswith(".txt")]
-    fnames_wo_text = list(set(fnames) - set(fnames_has_text))
-    logger.info(f"# files has text (all): {len(fnames_has_text)}")
-    logger.info(f"# files without text (all): {len(fnames_wo_text)}")
-
-    # select a subset of files
-    json_files = os.listdir(PathHelper.entities_dir)
-    entities_selected = []
-    for jf in json_files:
-        fname = jf.split(".")[0]
-        try:
-            with open(PathHelper.entities_dir / jf, "r") as f:
-                ent_i = json.load(f)
-
-            # if having transcript from entities, then save text
-            if ent_i.get("transcript"):
-                transcript_text = [t["text"] for t in ent_i["transcript"]]
-
-                # split into list of list with length 50
-                transcript_text = [
-                    transcript_text[i : i + 50]
-                    for i in range(0, len(transcript_text), 50)
-                ]
-
-                # restore punctuation
-                transcript_text_restore = []
-                for transcript_text_i in transcript_text:
-                    result_punct = punct_model.restore_punctuation(
-                        " ".join(transcript_text_i)
-                    )
-                    transcript_text_restore.append(result_punct)
-
-                # merge transcripts
-                transcript = "\n".join(transcript_text_restore)
-
-                # save transcript with encoding
-                with open(
-                    PathHelper.text_dir / f"{fname}.txt", "w", encoding="utf8"
-                ) as f:
-                    json.dump(transcript, f)
-
-            # if it's selected channel, then add to entities_selected
-            if channel_name:
-                if ent_i.get("channel_name") == channel_name:
-                    entities_selected.append(f"{ent_i['video_id']}.mp3")
-            else:
-                entities_selected.append(f"{ent_i['video_id']}.mp3")
-
-        except Exception as e:
-            logger.error(e)
-            continue
-
-    # logger
-    fnames_selected = set(fnames_wo_text).intersection(set(entities_selected))
-    logger.info(f"# files w/o text: {len(fnames_selected)}")
-
-    if args.limit > 0:
-        logger.info("limiting the size of the subset of files to be processed")
-        fnames_selected = list(fnames_selected)[: args.limit]
-
-    logger.info(f"# files selected: {len(fnames_selected)}")
-
-    # audio to text
-    # use faster whisper
-    model_size = "large-v3"
-    model = WhisperModel(model_size, device="cpu", compute_type="int8")
-    total_sec = 0
-    for fname_ext in tqdm(fnames_selected):
-        fname = fname_ext.split(".")[0]
-        audio_file = AudioSegment.from_mp3(PathHelper.audio_dir / fname_ext)
-        # logger.info(f"fname: {fname}")
-
-        # get total seconds
-        total_sec += audio_file.duration_seconds
-
-        # estimated cost
-        estimated_cost = total_sec / 60 * 0.006 * 32
-        logger.info("estimated cost in TWD: ${:.2f}".format(estimated_cost))
-
-        # audio to text and merge
-        # # split into chunks of 100 seconds
-        # chunk_size = 100 * 1000  # 100 secs
-        # chunks = [
-        #     audio_file[i : i + chunk_size]
-        #     for i in range(0, len(audio_file), chunk_size)
-        # ]
-        # # use openai api to transcribe
-        # client = OpenAI(api_key=os.environ["OPENAI_API_KEY"])
-        # transcripts = []
-        # for idx, chunk in tqdm(enumerate(chunks), total=len(chunks)):
-        #     fname_i = f"{PathHelper.audio_dir}/temp_{fname}_{idx}.mp3"
-        #     with chunk.export(fname_i, format="mp3") as f:
-        #         try:
-        #             result = client.audio.transcriptions.create(
-        #                 model="whisper-1", response_format="vtt", file=f
-        #             )
-        #             result_punct = punct_model.restore_punctuation(result.text)
-        #             transcripts.append(result_punct)
-        #         except Exception as e:
-        #             logger.error(e)
-        #             continue
-        #         finally:
-        #             os.remove(fname_i)
-        seg_i = []
+        # Transcribe using Whisper
         segments, info = model.transcribe(
-            str(PathHelper.audio_dir / fname_ext),
+            str(audio_path),
             beam_size=5,
             initial_prompt="以下是普通話的句子。",
         )
@@ -145,29 +44,77 @@ def main(args):
             % (info.language, info.language_probability)
         )
 
+        # Skip non-Chinese/English files
         if info.language not in ("en", "zh"):
             with open(PathHelper.text_dir / f"{fname}.txt", "w") as f:
                 json.dump("", f)
-            continue
+            return
 
-        for segment in segments:
-            # print("[%.2fs -> %.2fs] %s" % (segment.start, segment.end, segment.text))
-            seg_i.append([segment.start, segment.end, segment.text])
-
-        # merge transcripts
+        # Process transcript
+        seg_i = [[segment.start, segment.end, segment.text] for segment in segments]
         transcript_text = [
             [s[2] for s in seg_i[i : i + 10]] for i in range(0, len(seg_i), 10)
         ]
-        transcript_text_restore = []
-        for transcript_text_i in transcript_text:
-            result_punct = punct_model.restore_punctuation(" ".join(transcript_text_i))
-            transcript_text_restore.append(result_punct)
-
+        transcript_text_restore = [
+            punct_model.restore_punctuation(" ".join(text_block))
+            for text_block in transcript_text
+        ]
         transcript_processed = "".join(transcript_text_restore)
 
-        # save transcript
-        with open(PathHelper.text_dir / f"{fname}.txt", "w") as f:
+        # Save transcript
+        with open(PathHelper.text_dir / f"{fname}.txt", "w", encoding="utf8") as f:
             json.dump(transcript_processed, f)
+
+    except Exception as e:
+        logger.error(f"Error processing file {fname_ext}: {e}")
+
+
+def main(args):
+    channel_name = args.channel_name
+    logger.info(f"Channel name: {channel_name}")
+
+    # Initialize punctuation model
+    punct_model = PunctuationModel()
+
+    # Get list of files
+    fnames = [i for i in os.listdir(PathHelper.audio_dir) if i.endswith(".mp3")]
+    fnames_has_text = [i.split(".")[0] for i in os.listdir(PathHelper.text_dir) if i.endswith(".txt")]
+    fnames_wo_text = [f for f in fnames if f.split(".")[0] not in fnames_has_text]
+    logger.info(f"Files with text: {len(fnames_has_text)}")
+    logger.info(f"Files without text: {len(fnames_wo_text)}")
+
+    # Filter files based on selected channels
+    json_files = os.listdir(PathHelper.entities_dir)
+    entities_selected = []
+    for jf in json_files:
+        try:
+            with open(PathHelper.entities_dir / jf, "r") as f:
+                ent_i = json.load(f)
+
+            # Filter by channel name
+            if channel_name and ent_i.get("channel_name") != channel_name:
+                continue
+            entities_selected.append(f"{ent_i['video_id']}.mp3")
+        except Exception as e:
+            logger.error(f"Error loading entity file {jf}: {e}")
+            continue
+
+    # Get files to process
+    fnames_selected = list(set(fnames_wo_text).intersection(set(entities_selected)))
+    logger.info(f"Files selected for processing: {len(fnames_selected)}")
+
+    # Apply limit if specified
+    if args.limit > 0:
+        fnames_selected = fnames_selected[: args.limit]
+    logger.info(f"Files after applying limit: {len(fnames_selected)}")
+
+    # Initialize Whisper model
+    model_size = "large-v3"
+    model = WhisperModel(model_size, device="cpu", compute_type="int8")
+
+    # Process files
+    for fname_ext in tqdm(fnames_selected, desc="Processing audio files"):
+        process_audio_to_text(fname_ext, model, punct_model)
 
 
 if __name__ == "__main__":
@@ -175,14 +122,13 @@ if __name__ == "__main__":
     parser.add_argument(
         "--channel-name",
         type=str,
-        help="Channel Name without @",
-        # default="SunnyHuangIBCLC"
+        help="Filter by channel name (without @).",
         default=None,
     )
     parser.add_argument(
         "--limit",
         type=int,
-        help="size of the subset of files to be processed",
+        help="Limit the number of files to process.",
         default=-1,
     )
 
