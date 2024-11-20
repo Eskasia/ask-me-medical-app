@@ -111,18 +111,15 @@ qa_chain = ConversationalRetrievalChain.from_llm(
 def callback():
     signature = request.headers.get("X-Line-Signature", "")
     body = request.get_data(as_text=True)
-    app.logger.info(f"Request body: {body}")
+    logger.info(f"Request body: {body}")
 
     try:
         handler.handle(body, signature)
-    except InvalidSignatureError as e:
-        logger.error(f"無效的 LINE 簽名: {e}")
-        abort(400)
     except Exception as e:
-        logger.error(f"處理 LINE Webhook 時出錯: {e}")
+        logger.error(f"Error handling LINE webhook: {e}")
         abort(500)
 
-    return "OK"
+    return "OK", 200
 
 # LINE 消息事件處理
 @handler.add(MessageEvent, message=TextMessage)
