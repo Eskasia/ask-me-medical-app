@@ -12,3 +12,4 @@ aiobotocore
 psycopg2-binary
 pgvector
 urllib3
+langchain_community
