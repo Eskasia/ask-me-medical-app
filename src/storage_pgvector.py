@@ -1,5 +1,6 @@
 import argparse
 import os
+import json
 
 import pandas as pd
 import tiktoken
@@ -16,66 +17,74 @@ try:
     from utils import PathHelper, get_connection_string, get_logger, timeit
 except Exception as e:
     print(e)
-    raise ("Please run this script from the root directory of the project")
+    raise RuntimeError("Please run this script from the root directory of the project")
 
-# logger
+# Logger
 logger = get_logger(__name__)
 
-# load env variables
+# Load environment variables
 dotenv_path = PathHelper.root_dir / ".env"
 load_dotenv(dotenv_path=dotenv_path)
 
-# model name for creating embeddings
+# Model name for creating embeddings
 model_name = const.ENCODING_MODEL_NAME
 
 
 def num_tokens_from_string(string: str, encoding_name="cl100k_base") -> int:
+    """
+    Calculate the number of tokens in a given string using the specified encoding.
+    """
     if not string:
         return 0
-    # Returns the number of tokens in a text string
     encoding = tiktoken.get_encoding(encoding_name)
     num_tokens = len(encoding.encode(string))
     return num_tokens
 
 
+def process_videos_to_dataframe(text_dir, text_splitter) -> pd.DataFrame:
+    """
+    Process text files into a DataFrame with video_id and content.
+    """
+    videos = os.listdir(text_dir)
+    video_ids = [v.split(".")[0] for v in videos]
+    data = []
+
+    for video_id in tqdm(video_ids, desc="Processing videos"):
+        try:
+            with open(text_dir / f"{video_id}.txt", encoding="utf8") as f:
+                transcript = f.readlines()
+                text = json.loads(transcript[0])  # Use json.loads instead of eval
+
+            token_len = num_tokens_from_string(text)
+            if token_len <= 512:
+                data.append([video_id, text])
+            else:
+                # Split text into chunks
+                split_texts = text_splitter.split_text(text)
+                for chunk in split_texts:
+                    data.append([video_id, chunk])
+        except Exception as e:
+            logger.error(f"Error processing video {video_id}: {e}")
+
+    return pd.DataFrame(data, columns=["video_id", "content"])
+
+
 @timeit
 def main(args):
-    # init embeddings
+    # Initialize embeddings and text splitter
     embeddings = HuggingFaceEmbeddings(model_name=model_name)
     text_splitter = RecursiveCharacterTextSplitter(
         chunk_size=512, chunk_overlap=100, length_function=len
     )
 
-    # load data to dataframe
-    videos = os.listdir(PathHelper.text_dir)
-    video_ids = [v.split(".")[0] for v in videos]
-    df_videos = pd.DataFrame({"video_id": video_ids})
-    new_list = []
+    # Load text data into DataFrame
+    df_videos = process_videos_to_dataframe(PathHelper.text_dir, text_splitter)
 
-    # Create a new list by splitting up text into token sizes of around 512 tokens
-    for _, row in df_videos.iterrows():
-        video_id = row["video_id"]
-        try:
-            with open(PathHelper.text_dir / f"{video_id}.txt", encoding="utf8") as f:
-                transcript = f.readlines()
-                text = eval(transcript[0])
-            token_len = num_tokens_from_string(text)
-            if token_len <= 512:
-                new_list.append([video_id, text])
-            else:
-                # split text into chunks using text splitter
-                split_text = text_splitter.split_text(text)
-                for j in range(len(split_text)):
-                    new_list.append([video_id, split_text[j]])
-        except Exception as e:
-            logger.error(e)
-
-    df_new = pd.DataFrame(new_list, columns=["video_id", "content"])
-
-    # create docs
-    loader = DataFrameLoader(df_new, page_content_column="content")
+    # Load data as LangChain documents
+    loader = DataFrameLoader(df_videos, page_content_column="content")
     docs = loader.load()
 
+    # Initialize database
     if args.db == "pgvector":
         db = PGVector(
             collection_name=const.COLLECTION_NAME,
@@ -83,10 +92,11 @@ def main(args):
             embedding_function=embeddings,
         )
 
-        # add documents
-        for doc in tqdm(docs, total=len(docs)):
-            db.add_documents([doc])
-        logger.info("done loading from docs")
+        # Add documents in batches
+        batch_size = 100
+        for i in tqdm(range(0, len(docs), batch_size), desc="Loading to PGVector"):
+            db.add_documents(docs[i : i + batch_size])
+        logger.info("Documents successfully loaded into PGVector.")
 
     elif args.db == "chroma":
         page_contents = [doc.page_content for doc in docs]
@@ -95,19 +105,22 @@ def main(args):
             embeddings,
             persist_directory=str(PathHelper.db_dir / const.CHROMA_DB),
         )
+        logger.info("Documents successfully loaded into Chroma.")
+
     else:
-        raise ValueError(f"db: {args.db} not supported")
+        raise ValueError(f"Unsupported database type: {args.db}")
 
     return db
 
 
 if __name__ == "__main__":
-    # calculate how many seconds to run
     parser = argparse.ArgumentParser()
     parser.add_argument(
         "--db",
         type=str,
+        choices=["pgvector", "chroma"],
         default="pgvector",
+        help="Specify the database type to use ('pgvector' or 'chroma').",
     )
 
     args = parser.parse_args()
