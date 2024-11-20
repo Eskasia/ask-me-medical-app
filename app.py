@@ -9,7 +9,7 @@ from langchain.chains import ConversationalRetrievalChain
 from langchain.chat_models import ChatOpenAI
 from langchain.memory import ConversationBufferMemory
 from langchain_community.vectorstores.pgvector import PGVector
-from linebot import LineBotApi, WebhookHandler, WebhookParser
+from linebot import LineBotApi, WebhookHandler
 from linebot.models import MessageEvent, TextMessage, TextSendMessage
 from opencc import OpenCC
 
@@ -17,88 +17,64 @@ import src.constants as const
 import src.utils as utils
 from src.utils import MaxPoolingEmbeddings, PathHelper, get_logger
 
-# logger, env and const
+# Initialize logger
 logger = get_logger(__name__)
+
+# Load environment variables
 dotenv_path = PathHelper.root_dir / ".env"
 load_dotenv(dotenv_path=dotenv_path)
-encoding_model_name = const.ENCODING_MODEL_NAME
 
-# get channel_secret and channel_access_token from your environment variable
-channel_secret = os.getenv("CHANNEL_SECRET", None)
-channel_access_token = os.getenv("CHANNEL_ACCESS_TOKEN", None)
-if channel_secret is None:
-    print("Specify LINE_CHANNEL_SECRET as environment variable.")
-    sys.exit(1)
-if channel_access_token is None:
-    print("Specify LINE_CHANNEL_ACCESS_TOKEN as environment variable.")
-    sys.exit(1)
+# Get LINE Bot credentials
+channel_secret = os.getenv("CHANNEL_SECRET")
+channel_access_token = os.getenv("CHANNEL_ACCESS_TOKEN")
+if not channel_secret or not channel_access_token:
+    logger.error("Missing LINE_CHANNEL_SECRET or LINE_CHANNEL_ACCESS_TOKEN.")
+    sys.exit("Environment variables missing. Check your .env file.")
 
-# multi-lingual support
+# Support multi-lingual
 support_multilingual = strtobool(os.getenv("SUPPORT_MULTILINGUAL", "False"))
 
-
-# configure_retriever
+# Configure retriever
 def configure_retriever():
-    logger.info("configuring retriever")
-    embeddings = MaxPoolingEmbeddings(
-        api_key=os.getenv("HUGGINGFACEHUB_API_TOKEN"),
-        model_name=encoding_model_name,
-    )
+    try:
+        logger.info("Configuring retriever...")
+        embeddings = MaxPoolingEmbeddings(
+            api_key=os.getenv("HUGGINGFACEHUB_API_TOKEN"),
+            model_name=const.ENCODING_MODEL_NAME,
+        )
+        vectordb = PGVector(
+            collection_name=const.COLLECTION_NAME,
+            connection_string=utils.get_connection_string(),
+            embedding_function=embeddings,
+        )
+        retriever = vectordb.as_retriever(
+            search_type="mmr", search_kwargs={"k": const.N_DOCS}
+        )
+        logger.info("Retriever configured successfully.")
+        return retriever
+    except Exception as e:
+        logger.error(f"Error configuring retriever: {e}")
+        sys.exit("Failed to configure retriever.")
 
-    # # download from s3 if folder db/{xxx} is not exist
-    # s3r = boto3.resource(
-    #     "s3",
-    #     aws_access_key_id=os.getenv("AWS_ACCESS_KEY_ID"),
-    #     aws_secret_access_key=os.getenv("AWS_SECRET_ACCESS_KEY"),
-    #     region_name=os.getenv("AWS_REGION_NAME"),
-    # )
-    # s3_bucket = s3r.Bucket(const.S3_BUCKET_NAME)
-
-    # if not os.path.exists(PathHelper.db_dir / const.CHROMA_DB):
-    #     logger.info("downloading db from s3")
-    #     for obj in s3_bucket.objects.filter(Prefix=f"{const.DB}/{const.CHROMA_DB}"):
-    #         if not os.path.exists(os.path.dirname(obj.key)):
-    #             os.makedirs(os.path.dirname(obj.key))
-    #         logger.info(f"download file: {obj.key}")
-    #         s3_bucket.download_file(obj.key, obj.key)
-
-    # vectordb = Chroma(
-    #     persist_directory=str(PathHelper.db_dir / const.CHROMA_DB),
-    #     embedding_function=embeddings,
-    # )
-    vectordb = PGVector(
-        collection_name=const.COLLECTION_NAME,
-        connection_string=utils.get_connection_string(),
-        embedding_function=embeddings,
-    )
-    retriever = vectordb.as_retriever(
-        search_type="mmr", search_kwargs={"k": const.N_DOCS}
-    )
-
-    logger.info("configuring retriever done")
-    return retriever
-
-
-# create app
+# Initialize Flask app
 app = Flask(__name__)
 line_bot_api = LineBotApi(channel_access_token)
 handler = WebhookHandler(channel_secret)
-parser = WebhookParser(channel_secret)
 
-# initialize agent and retriever
+# Initialize LLM
 llm = ChatOpenAI(
     model_name=const.CHAT_GPT_MODEL_NAME,
     temperature=0,
     streaming=True,
 )
 
-# configure retriever
+# Initialize retriever
 retriever = configure_retriever()
 
-# create converter (simple chinese to traditional chinese)
+# Simplified Chinese to Traditional Chinese converter
 s2t_converter = OpenCC("s2t")
 
-# translate and comprehend
+# AWS services for translation and language detection
 translate = boto3.client(
     "translate",
     aws_access_key_id=os.getenv("AWS_ACCESS_KEY_ID"),
@@ -112,8 +88,7 @@ comprehend = boto3.client(
     region_name=os.getenv("AWS_REGION_NAME"),
 )
 
-
-# create memory
+# Initialize memory
 memory = ConversationBufferMemory(
     memory_key="chat_history",
     return_messages=True,
@@ -121,7 +96,7 @@ memory = ConversationBufferMemory(
     output_key="answer",
 )
 
-# use PromptTemplate to generate prompts
+# LangChain QA Chain
 qa_chain = ConversationalRetrievalChain.from_llm(
     llm,
     retriever=retriever,
@@ -130,22 +105,19 @@ qa_chain = ConversationalRetrievalChain.from_llm(
     return_source_documents=True,
 )
 
-
-# create handlers
 @app.route("/callback", methods=["POST"])
 def callback():
-    signature = request.headers["X-Line-Signature"]
+    signature = request.headers.get("X-Line-Signature", "")
     body = request.get_data(as_text=True)
-    app.logger.info("Request body: " + body)
+    app.logger.info(f"Request body: {body}")
 
     try:
         handler.handle(body, signature)
     except Exception as e:
-        logger.error(e)
+        logger.error(f"Error handling LINE webhook: {e}")
         abort(400)
 
     return "OK"
-
 
 @handler.add(MessageEvent, message=TextMessage)
 def handle_message(event):
@@ -153,61 +125,48 @@ def handle_message(event):
 
     if question.startswith("/清除") or question.lower().startswith("/clear"):
         memory.clear()
-        answer = "歷史訊息清除成功"
-    elif (
-        question.startswith("/教學")
-        or question.startswith("/指令")
-        or question.startswith("/說明")
-        or question.startswith("/操作說明")
-        or question.lower().startswith("/instruction")
-        or question.lower().startswith("/help")
-    ):
-        answer = "指令：\n/清除 or /clear\n👉 當 Bot 開始鬼打牆，可清除歷史訊息來重置"
+        answer = "歷史訊息清除成功。"
+    elif question.lower().startswith("/help") or question.startswith("/說明"):
+        answer = (
+            "指令：\n"
+            "/清除 或 /clear - 清除歷史對話。\n"
+            "/說明 或 /help - 查看指令幫助。"
+        )
     else:
-        if support_multilingual:
-            # check input language
-            question_lang_obj = comprehend.detect_dominant_language(Text=question)
-            question_lang = question_lang_obj["Languages"][0]["LanguageCode"]
-        else:
-            question_lang = const.DEFAULT_LANG
-        logger.info(f"question language: {question_lang}")
+        try:
+            if support_multilingual:
+                question_lang_obj = comprehend.detect_dominant_language(Text=question)
+                question_lang = question_lang_obj["Languages"][0]["LanguageCode"]
+            else:
+                question_lang = const.DEFAULT_LANG
 
-        # get answer from qa_chain
-        response = qa_chain({"question": question})
-        answer = response["answer"]
-        answer = s2t_converter.convert(answer)
-        logger.info(f"answer: {response}")
+            response = qa_chain({"question": question})
+            answer = response["answer"]
+            answer = s2t_converter.convert(answer)
 
-        # check answer language
-        answer_lang = const.DEFAULT_LANG
+            if support_multilingual and question_lang != "zh-TW":
+                answer_translated = translate.translate_text(
+                    Text=answer,
+                    SourceLanguageCode="zh-TW",
+                    TargetLanguageCode=question_lang,
+                )
+                answer = answer_translated["TranslatedText"]
 
-        if (question_lang != answer_lang) and support_multilingual:
-            # tranlate answer to input language
-            logger.info(f"translating answer to {question_lang}")
-            answer_translated = translate.translate_text(
-                Text=answer,
-                SourceLanguageCode=answer_lang,
-                TargetLanguageCode=question_lang,
-            )
-            answer = answer_translated["TranslatedText"]
+            ref_video_template = ""
+            if "source_documents" in response:
+                for i in range(min(const.N_SOURCE_DOCS, len(response["source_documents"]))):
+                    doc = response["source_documents"][i]
+                    video_id = doc.metadata.get("video_id", "unknown")
+                    if video_id != "unknown":
+                        url = f"https://www.youtube.com/watch?v={video_id}"
+                        ref_video_template += f"{url}\n"
+            answer += f"\n\nSource:\n{ref_video_template}" if ref_video_template else ""
+        except Exception as e:
+            logger.error(f"Error generating answer: {e}")
+            answer = "抱歉，我無法處理您的請求，請稍後再試。"
 
-    # select most related docs and get video id
-    ref_video_template = ""
-    for i in range(min(const.N_SOURCE_DOCS, len(response["source_documents"]))):
-        most_related_doc = response["source_documents"][i]
-        most_related_video_id = most_related_doc.metadata["video_id"]
-        url = f"https://www.youtube.com/watch?v={most_related_video_id}"
-        ref_video_template = f"{ref_video_template}\n{url}"
-
-    # add reference video
-    answer = f"{answer}\n\nSource: {ref_video_template}"
-
-    # reply message
     line_bot_api.reply_message(event.reply_token, TextSendMessage(text=answer))
 
-
 if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 5000))
+    port = int(os.getenv("PORT", 5000))
     app.run(host="0.0.0.0", port=port, debug=True)
-
-    logger.info("app started")
