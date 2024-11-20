@@ -19,25 +19,25 @@ from src.utils import MaxPoolingEmbeddings, PathHelper, get_logger
 # 初始化 logger
 logger = get_logger(__name__)
 
-# 加載環境變量
+# 載入環境變數
 dotenv_path = PathHelper.root_dir / ".env"
 load_dotenv(dotenv_path=dotenv_path)
 
-# 獲取 LINE Bot 憑據
+# 取得 LINE Bot 憑據
 channel_secret = os.getenv("CHANNEL_SECRET")
 channel_access_token = os.getenv("CHANNEL_ACCESS_TOKEN")
 if not channel_secret or not channel_access_token:
     logger.error("缺少 CHANNEL_SECRET 或 CHANNEL_ACCESS_TOKEN.")
-    sys.exit("環境變量缺失，請檢查 .env 文件。")
+    sys.exit("環境變數缺失，請檢查 .env 檔案。")
 
-# 初始化 Flask 應用
+# 初始化 Flask 應用程式
 app = Flask(__name__)
 
 # 初始化 LINE Bot API 和 Webhook Handler
 line_bot_api = LineBotApi(channel_access_token)
 handler = WebhookHandler(channel_secret)
 
-# 是否支持多語言
+# 是否支援多語言
 support_multilingual = strtobool(os.getenv("SUPPORT_MULTILINGUAL", "False"))
 
 # 配置檢索器
@@ -59,7 +59,7 @@ def configure_retriever():
         logger.info("檢索器配置成功。")
         return retriever
     except Exception as e:
-        logger.error(f"配置檢索器時出錯: {e}")
+        logger.error(f"配置檢索器時發生錯誤: {e}")
         sys.exit("檢索器配置失敗。")
 
 # 初始化 LLM
@@ -72,10 +72,10 @@ llm = ChatOpenAI(
 # 初始化檢索器
 retriever = configure_retriever()
 
-# 簡體到繁體轉換器
+# 簡體轉繁體轉換器
 s2t_converter = OpenCC("s2t")
 
-# AWS 服務初始化
+# 初始化 AWS 服務
 translate = boto3.client(
     "translate",
     aws_access_key_id=os.getenv("AWS_ACCESS_KEY_ID"),
@@ -89,7 +89,7 @@ comprehend = boto3.client(
     region_name=os.getenv("AWS_REGION_NAME"),
 )
 
-# 初始化記憶
+# 初始化記憶體
 memory = ConversationBufferMemory(
     memory_key="chat_history",
     return_messages=True,
@@ -97,7 +97,7 @@ memory = ConversationBufferMemory(
     output_key="answer",
 )
 
-# LangChain QA Chain
+# LangChain QA 鏈
 qa_chain = ConversationalRetrievalChain.from_llm(
     llm,
     retriever=retriever,
@@ -106,22 +106,22 @@ qa_chain = ConversationalRetrievalChain.from_llm(
     return_source_documents=True,
 )
 
-# LINE Webhook 回調
+# LINE Webhook 回調函數
 @app.route("/callback", methods=["POST"])
 def callback():
     signature = request.headers.get("X-Line-Signature", "")
     body = request.get_data(as_text=True)
-    logger.info(f"Request body: {body}")
+    logger.info(f"請求內容: {body}")
 
     try:
         handler.handle(body, signature)
     except Exception as e:
-        logger.error(f"Error handling LINE webhook: {e}")
+        logger.error(f"處理 LINE Webhook 時發生錯誤: {e}")
         abort(500)
 
     return "OK", 200
 
-# LINE 消息事件處理
+# 處理 LINE 訊息事件
 @handler.add(MessageEvent, message=TextMessage)
 def handle_message(event):
     question = event.message.text.strip()
@@ -137,7 +137,7 @@ def handle_message(event):
         )
     else:
         try:
-            # 處理多語言支持
+            # 支援多語言處理
             if support_multilingual:
                 question_lang_obj = comprehend.detect_dominant_language(Text=question)
                 question_lang = question_lang_obj["Languages"][0]["LanguageCode"]
@@ -149,7 +149,7 @@ def handle_message(event):
             answer = response["answer"]
             answer = s2t_converter.convert(answer)
 
-            # 翻譯答案到用戶語言
+            # 翻譯答案到使用者語言
             if support_multilingual and question_lang != "zh-TW":
                 answer_translated = translate.translate_text(
                     Text=answer,
@@ -158,7 +158,7 @@ def handle_message(event):
                 )
                 answer = answer_translated["TranslatedText"]
 
-            # 添加引用視頻鏈接
+            # 添加參考影片連結
             ref_video_template = ""
             if "source_documents" in response:
                 for i in range(min(const.N_SOURCE_DOCS, len(response["source_documents"]))):
@@ -169,13 +169,13 @@ def handle_message(event):
                         ref_video_template += f"{url}\n"
             answer += f"\n\n參考來源:\n{ref_video_template}" if ref_video_template else ""
         except Exception as e:
-            logger.error(f"生成答案時出錯: {e}")
+            logger.error(f"生成答案時發生錯誤: {e}")
             answer = "抱歉，我無法處理您的請求，請稍後再試。"
 
-    # 回復用戶消息
+    # 回覆使用者訊息
     line_bot_api.reply_message(event.reply_token, TextSendMessage(text=answer))
 
-# 主程序運行
+# 主程式運行
 if __name__ == "__main__":
     port = int(os.getenv("PORT", 5000))
     app.run(host="0.0.0.0", port=port, debug=True)
