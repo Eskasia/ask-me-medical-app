@@ -127,6 +127,8 @@ def callback():
 def handle_message(event):
     question = event.message.text.strip()
 
+    logger.info(f"收到的訊息: {question}")  # Log 收到的訊息
+
     if question.startswith("/清除") or question.lower().startswith("/clear"):
         memory.clear()
         answer = "歷史訊息清除成功。"
@@ -142,16 +144,21 @@ def handle_message(event):
             if support_multilingual:
                 question_lang_obj = comprehend.detect_dominant_language(Text=question)
                 question_lang = question_lang_obj["Languages"][0]["LanguageCode"]
+                logger.info(f"檢測到的語言: {question_lang}")  # Log 檢測到的語言
             else:
                 question_lang = const.DEFAULT_LANG
 
             # 獲取回答
+            logger.info(f"發送到 QA Chain 的問題: {question}")
             response = qa_chain({"question": question})
             answer = response["answer"]
+            logger.info(f"生成的答案: {answer}")  # Log 生成的答案
+
             answer = s2t_converter.convert(answer)
 
             # 翻譯答案到使用者語言
             if support_multilingual and question_lang != "zh-TW":
+                logger.info(f"翻譯答案到 {question_lang} 語言")
                 answer_translated = translate.translate_text(
                     Text=answer,
                     SourceLanguageCode="zh-TW",
@@ -173,9 +180,15 @@ def handle_message(event):
             logger.error(f"生成答案時發生錯誤: {e}")
             answer = "抱歉，我無法處理您的請求，請稍後再試。"
 
-    # 回覆使用者訊息
-    line_bot_api.reply_message(event.reply_token, TextSendMessage(text=answer))
-
+    # Log 最終的回答
+    logger.info(f"回覆的訊息: {answer}")
+    
+    try:
+        # 回覆使用者訊息
+        line_bot_api.reply_message(event.reply_token, TextSendMessage(text=answer))
+        logger.info("訊息已成功發送")
+    except Exception as e:
+        logger.error(f"回覆訊息時發生錯誤: {e}")
 # 主程式運行
 if __name__ == "__main__":
     port = int(os.getenv("PORT", 5000))
