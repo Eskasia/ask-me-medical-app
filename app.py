@@ -17,7 +17,41 @@ import src.constants as const
 import src.utils as utils
 from src.utils import MaxPoolingEmbeddings, PathHelper, get_logger
 import logging
+import psycopg2
+from psycopg2 import OperationalError
 
+# 設置 logger
+logger = logging.getLogger(__name__)
+logging.basicConfig(level=logging.INFO)
+
+# 測試資料庫連接
+def test_db_connection():
+    try:
+        # 建立資料庫連接
+        connection = psycopg2.connect(
+            dbname=os.getenv("PGVECTOR_DB_NAME"),
+            user=os.getenv("PGVECTOR_USER"),
+            password=os.getenv("PGVECTOR_PASSWORD"),
+            host=os.getenv("PGVECTOR_HOST"),
+            port=os.getenv("PGVECTOR_PORT"),
+        )
+        
+        # 創建一個游標對象
+        cursor = connection.cursor()
+        
+        # 執行簡單查詢
+        cursor.execute("SELECT 1;")
+        result = cursor.fetchone()
+        
+        if result:
+            logger.info("資料庫連接測試成功!")
+        else:
+            logger.error("資料庫連接測試失敗!")
+        
+        cursor.close()
+        connection.close()
+    except OperationalError as e:
+        logger.error(f"資料庫連接失敗: {e}")
 # 初始化 logger
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
