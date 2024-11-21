@@ -61,6 +61,10 @@ def configure_retriever():
             connection_string=utils.get_connection_string(),
             embedding_function=embeddings,
         )
+        
+        # 確認資料庫連接成功
+        logger.info("資料庫連接成功!")
+        
         retriever = vectordb.as_retriever(
             search_type="mmr", search_kwargs={"k": const.N_DOCS}
         )
