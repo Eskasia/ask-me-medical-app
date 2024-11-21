@@ -238,5 +238,6 @@ def handle_message(event):
     line_bot_api.reply_message(event.reply_token, TextSendMessage(text=answer))
 # 主程式運行
 if __name__ == "__main__":
+    test_db_connection()  # 測試資料庫連接
     port = int(os.getenv("PORT", 5000))
     app.run(host="0.0.0.0", port=port, debug=False)
