@@ -73,7 +73,10 @@ def configure_retriever():
     except Exception as e:
         logger.error(f"配置檢索器時發生錯誤: {e}")
         sys.exit("檢索器配置失敗。")
-
+def get_connection_string():
+    connection_string = f"postgresql://{os.getenv('PGVECTOR_USER')}:{os.getenv('PGVECTOR_PASSWORD')}@{os.getenv('PGVECTOR_HOST')}:{os.getenv('PGVECTOR_PORT')}/{const.PGVECTOR_DB_NAME}"
+    logger.info(f"資料庫連接字符串: {connection_string}")
+    return connection_string
 # 初始化 LLM
 llm = ChatOpenAI(
     model_name=const.CHAT_GPT_MODEL_NAME,
