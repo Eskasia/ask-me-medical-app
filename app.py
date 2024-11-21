@@ -141,6 +141,7 @@ def handle_message(event):
         memory.clear()
         answer = "歷史訊息清除成功。"
     elif question.lower().startswith("/help") or question.startswith("/說明"):
+        logger.info("Help command triggered")
         answer = (
             "指令：\n"
             "/清除 或 /clear - 清除歷史對話。\n"
@@ -182,8 +183,17 @@ def handle_message(event):
         except Exception as e:
             logger.error(f"生成答案時發生錯誤: {e}")
             answer = "抱歉，我無法處理您的請求，請稍後再試。"
+    # 在發送回應之前記錄訊息
+    logger.info(f"Sending reply: {answer}")
 
+    try:
+        # 發送回覆訊息
+        line_bot_api.reply_message(event.reply_token, TextSendMessage(text=answer))
+    except Exception as e:
+        # 如果回覆發生錯誤，記錄錯誤
+        logger.error(f"Error while sending reply: {e}")
     # 回覆使用者訊息
+    logger.info(f"Sending reply: {answer}")
     line_bot_api.reply_message(event.reply_token, TextSendMessage(text=answer))
 # 主程式運行
 if __name__ == "__main__":
