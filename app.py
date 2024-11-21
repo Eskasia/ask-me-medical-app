@@ -126,8 +126,7 @@ def callback():
 @handler.add(MessageEvent, message=TextMessage)
 def handle_message(event):
     question = event.message.text.strip()
-
-    logger.info(f"收到的訊息: {question}")  # Log 收到的訊息
+    logger.info(f"收到的訊息: {question}")  # 日誌記錄收到的訊息
 
     if question.startswith("/清除") or question.lower().startswith("/clear"):
         memory.clear()
@@ -140,53 +139,21 @@ def handle_message(event):
         )
     else:
         try:
-            # 支援多語言處理
-            if support_multilingual:
-                question_lang_obj = comprehend.detect_dominant_language(Text=question)
-                question_lang = question_lang_obj["Languages"][0]["LanguageCode"]
-                logger.info(f"檢測到的語言: {question_lang}")  # Log 檢測到的語言
-            else:
-                question_lang = const.DEFAULT_LANG
-
-            # 獲取回答
-            logger.info(f"發送到 QA Chain 的問題: {question}")
+            # 這裡加入日誌，檢查是否有進行回答生成
+            logger.info("正在生成回答...")
             response = qa_chain({"question": question})
             answer = response["answer"]
-            logger.info(f"生成的答案: {answer}")  # Log 生成的答案
+            logger.info(f"生成的回答: {answer}")  # 日誌記錄生成的回答
 
-            answer = s2t_converter.convert(answer)
-
-            # 翻譯答案到使用者語言
-            if support_multilingual and question_lang != "zh-TW":
-                logger.info(f"翻譯答案到 {question_lang} 語言")
-                answer_translated = translate.translate_text(
-                    Text=answer,
-                    SourceLanguageCode="zh-TW",
-                    TargetLanguageCode=question_lang,
-                )
-                answer = answer_translated["TranslatedText"]
-
-            # 添加參考影片連結
-            ref_video_template = ""
-            if "source_documents" in response:
-                for i in range(min(const.N_SOURCE_DOCS, len(response["source_documents"]))):
-                    doc = response["source_documents"][i]
-                    video_id = doc.metadata.get("video_id", "unknown")
-                    if video_id != "unknown":
-                        url = f"https://www.youtube.com/watch?v={video_id}"
-                        ref_video_template += f"{url}\n"
-            answer += f"\n\n參考來源:\n{ref_video_template}" if ref_video_template else ""
         except Exception as e:
-            logger.error(f"生成答案時發生錯誤: {e}")
-            answer = "抱歉，我無法處理您的請求，請稍後再試。"
+            logger.error(f"回答生成時出錯: {e}")
+            answer = "抱歉，無法處理您的請求。"
 
-    # Log 最終的回答
-    logger.info(f"回覆的訊息: {answer}")
-    
+    # 確保 reply_message 正確調用
     try:
-        # 回覆使用者訊息
+        logger.info(f"準備回覆: {answer}")
         line_bot_api.reply_message(event.reply_token, TextSendMessage(text=answer))
-        logger.info("訊息已成功發送")
+        logger.info("回覆訊息已發送")
     except Exception as e:
         logger.error(f"回覆訊息時發生錯誤: {e}")
 # 主程式運行
